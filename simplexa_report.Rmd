@@ -1,0 +1,477 @@
+---
+#title: 'COVID-19 RT-PCR Target Difference Report'
+#author: "Brendan J. Kelly, MD, MS"
+output: html_document
+output_dir: reports
+css: style_helvetica_double.css
+---
+
+```{r setup, echo=FALSE, eval=TRUE, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(tidybayes)
+library(brms)
+set.seed(16)
+
+
+```
+  
+
+```{r read_process_data, echo=FALSE, eval=TRUE, include=FALSE}
+
+readxl::read_xlsx("./data/Simplexa_Ct_values_newest.xlsx") %>%
+  rename_all(.funs = ~ gsub(" |\\\n|\\\r|\\(|\\)","_",tolower(.x))) %>%
+  rename_all(.funs = ~ gsub("__|___|____|_$","",.x)) %>%
+  rename(specimen_id = sample_id) %>%
+  select(specimen_id, s_genefam, orf1abjoe, rna_icq670) %>%
+  mutate_at(.vars = vars(-specimen_id), .funs = ~ as.numeric(.x)) %>%
+  identity() -> dat
+dat
+
+
+gsub("-","",Sys.Date()) -> today_date
+
+
+dat %>%
+  write_csv(paste0("./reports/simplexa_ct_values_", today_date,".csv"))
+
+
+
+```
+
+
+```{r run_save_models, echo=FALSE, eval=FALSE, include=FALSE}
+
+#' model ORF1ab
+
+dat %>%
+  mutate(diff = orf1abjoe - s_genefam,
+         avg = map2_dbl(.x = orf1abjoe, .y = orf1abjoe, .f = ~ (.x + .y) / 2),
+  ) %>%
+  brm(formula = bf(diff ~ 1, sigma ~ orf1abjoe + 1),
+      data = .,
+      family = gaussian(),
+      chains = 4,
+      cores = 4,
+      control = list("adapt_delta" = 0.999, max_treedepth = 18),
+      backend = "cmdstanr",
+      seed = 16) -> m_lin_diff_sigma_orf1ab
+
+m_lin_diff_sigma_orf1ab %>%
+  write_rds(file = paste0("./reports/m_lin_diff_sigma_orf1ab_",today_date,".rds.gz"), compress = "gz")
+
+
+#' model S Gene
+
+dat %>%
+  mutate(diff = orf1abjoe - s_genefam,
+         avg = map2_dbl(.x = orf1abjoe, .y = orf1abjoe, .f = ~ (.x + .y) / 2),
+  ) %>%
+  brm(formula = bf(diff ~ 1, sigma ~ s_genefam + 1),
+      data = .,
+      family = gaussian(),
+      chains = 4,
+      cores = 4,
+      control = list("adapt_delta" = 0.999, max_treedepth = 18),
+      backend = "cmdstanr",
+      seed = 16) -> m_lin_diff_sigma_sgene
+
+m_lin_diff_sigma_sgene %>%
+  write_rds(file = paste0("./reports/m_lin_diff_sigma_sgene_",today_date,".rds.gz"), compress = "gz")
+
+
+
+```
+
+  
+## Simplexa SARS-CoV-2 RT-PCR Target Difference Analysis: `r format(Sys.Date(), '%d %B %Y')`     
+  
+### Simplexa Data Collected To Date:   
+  
+- There have been `r nrow(dat)` specimens collected to date with the following Ct values:
+
+```{r ct_summary, echo=FALSE, eval=TRUE, include=TRUE}
+
+dat %>%
+  select(-specimen_id) %>%
+  pivot_longer(cols = everything(), names_to = "RT-PCR Target", values_to = "Ct") %>%
+  mutate(`RT-PCR Target` = case_when(`RT-PCR Target` == "s_genefam" ~ "S Gene",
+                              `RT-PCR Target` == "orf1abjoe" ~ "ORF1ab",
+                              `RT-PCR Target` == "rna_icq670" ~ "Internal Control")) %>%
+  group_by(`RT-PCR Target`) %>%
+  summarise(`Mean (Ct)` = mean(Ct, na.rm = TRUE),
+            `SD (Ct)` = sd(Ct, na.rm = TRUE),
+            `Median (Ct)` = median(Ct, na.rm = TRUE),
+            `IQR (Ct)` = IQR(Ct, na.rm = TRUE),
+            ) %>%
+  gt::gt() %>%
+  gt::fmt_number(columns = 2:5, n_sigfig = 3)
+
+
+```
+  
+  
+-----  
+\newpage
+<P style = "page-break-before: always">
+  
+  
+  
+### Correlation Between RT-PCR Targets:   
+  
+```{r corr_descriptive, echo=FALSE, eval=TRUE, include=FALSE}
+
+dat %>%
+  ggplot(data = ., aes(x = s_genefam, y = orf1abjoe)) +
+  geom_point(shape = 21) +
+  geom_abline(intercept = 0, slope = 1, linetype = 2) +
+  theme_bw() +
+  theme(axis.text = element_text(color = "black"),
+        plot.title.position = "plot") +
+  coord_equal() +
+  labs(x = "S Gene (Ct)",
+       y = "ORF1ab (Ct)"#,
+       #title = "Correlation Between SARS-CoV-2 Targets"
+       ) -> p_corr_descriptive
+
+p_corr_descriptive %>%
+  ggsave(filename = paste0("./reports/p_corr_descriptive_",today_date,".pdf"), device = cairo_pdf, height = 4, width = 4, units = "in")
+p_corr_descriptive %>%
+  ggsave(filename = paste0("./reports/p_corr_descriptive_",today_date,".png"), height = 4, width = 4, units = "in")
+p_corr_descriptive %>%
+  ggsave(filename = paste0("./reports/p_corr_descriptive_",today_date,".svg"), height = 4, width = 4, units = "in")
+
+
+```
+
+
+
+```{r fig_corr_descriptive, echo=FALSE, eval=TRUE, fig.align='center', out.width='60%'}
+
+knitr::include_graphics(path = paste0("./reports/p_corr_descriptive_",today_date,".svg"))
+
+
+```
+  
+  
+  
+-----  
+\newpage
+<P style = "page-break-before: always">
+  
+  
+  
+### Model Difference Between RT-PCR Targets per ORF1ab:   
+  
+```{r fit_diff_orf1ab, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+
+#' model
+
+read_rds(file = paste0("./reports/m_lin_diff_sigma_orf1ab_",today_date,".rds.gz")) %>%
+  identity() -> m_lin_diff_sigma_orf1ab
+
+
+
+#' predictive distribution
+m_lin_diff_sigma_orf1ab$data %>%
+  as_tibble() %>%
+  expand(orf1abjoe = modelr::seq_range(orf1abjoe, n = 100)) %>%
+  add_predicted_draws(m_lin_diff_sigma_orf1ab) %>%
+  ggplot(aes(x = orf1abjoe, y = .prediction)) +
+  stat_lineribbon() +
+  geom_point(aes(x = orf1abjoe, y = diff), data = m_lin_diff_sigma_orf1ab$data, shape = 21) +
+  geom_hline(yintercept = mean(m_lin_diff_sigma_orf1ab$data$diff, na.rm = TRUE) - 2.5 * sd(m_lin_diff_sigma_orf1ab$data$diff, na.rm = TRUE), linetype = 2) +
+  geom_hline(yintercept = mean(m_lin_diff_sigma_orf1ab$data$diff, na.rm = TRUE) + 2.5 * sd(m_lin_diff_sigma_orf1ab$data$diff, na.rm = TRUE), linetype = 2) +
+  geom_vline(xintercept = 30, linetype = 2) + 
+  scale_fill_brewer() +
+  theme_bw() +
+  theme(axis.text = element_text(color = "black"),
+        plot.title.position = "plot") +
+  labs(x = "ORF1ab (Ct)",
+       y = "Difference in Target Ct Values\n (ORF1ab Ct - S Gene Ct)",
+       fill = "Posterior\nPredictive\nInterval"#,
+       #title = "Model vs Threshold for Target Difference"
+       ) -> p_diff_model_orf1ab
+
+p_diff_model_orf1ab %>%
+  ggsave(filename = paste0("./reports/p_diff_model_orf1ab_",today_date,".pdf"), device = cairo_pdf, height = 4, width = 6, units = "in")
+p_diff_model_orf1ab %>%
+  ggsave(filename = paste0("./reports/p_diff_model_orf1ab_",today_date,".png"), height = 4, width = 6, units = "in")
+p_diff_model_orf1ab %>%
+  ggsave(filename = paste0("./reports/p_diff_model_orf1ab_",today_date,".svg"), height = 4, width = 6, units = "in")
+
+
+```
+
+```{r fit_diff_orf1ab_outliers, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+
+#' outliers
+dat %>%
+  mutate(diff = orf1abjoe - s_genefam,
+         avg = map2_dbl(.x = orf1abjoe, .y = s_genefam, .f = ~ (.x + .y) / 2),
+  ) %>%
+  add_predicted_draws(m_lin_diff_sigma_orf1ab) %>%
+  select(diff, orf1abjoe, .row, .prediction) %>%
+  summarise(p_residual = mean(.prediction < diff),
+            p_residual_corrected = ifelse(p_residual < 0.5, 1 - p_residual, p_residual),
+            z_residual = qnorm(p_residual),
+            z_residual_corrected = qnorm(p_residual_corrected)) %>%
+  mutate(p_residual_corrected_999 = p_residual_corrected > 0.999,
+         p_residual_corrected_99 = p_residual_corrected > 0.99,
+         p_residual_corrected_95 = p_residual_corrected > 0.95,
+  ) %>%
+  #qplot(data = ., x = s_genefam, y = diff, color = p_residual_corrected > 0.99, geom = "point")
+  identity() -> dat_predictive_residuals_orf1ab
+
+dat_predictive_residuals_orf1ab %>%
+  ungroup() %>%
+  write_csv(paste0("./reports/residuals_m_lin_diff_sigma_orf1ab_", today_date, ".csv"))
+
+
+```
+
+  
+- Model parameter estimates:  
+  
+```{r param_diff_orf1ab, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+m_lin_diff_sigma_orf1ab %>%
+  posterior_summary() %>%
+  as_tibble(rownames = "Parameter") %>%
+  gt::gt() %>%
+  gt::fmt_number(columns = 2:5, n_sigfig = 3)
+
+
+
+```
+
+  
+  
+- Model fit diagnostics:  
+  
+```{r diag_diff_orf1ab, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+tibble(Divergences = rstan::get_num_divergent(m_lin_diff_sigma_orf1ab$fit),
+       `E-BFMI Pathology` = sum(rstan::get_bfmi(m_lin_diff_sigma_orf1ab$fit) > 1.2)) %>%
+  gt::gt()
+
+
+
+```
+
+  
+  
+- Model predictions:  
+  
+  
+```{r fig_diff_orf1ab, echo=FALSE, eval=TRUE, fig.align='center', out.width='75%'}
+
+knitr::include_graphics(path = paste0("./reports/p_diff_model_orf1ab_",today_date,".svg"))
+
+
+```
+
+  
+- Most extreme outliers:   
+
+```{r tab_diff_orf1ab, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+dat_predictive_residuals_orf1ab %>%
+  ungroup() %>%
+  select(specimen_id, p_residual_corrected, z_residual) %>%
+  arrange(desc(p_residual_corrected)) %>%
+  filter(p_residual_corrected >= 0.99) %>%
+  #slice(1:10) %>%
+  rename(Specimen = specimen_id,
+         `Probability Quantile of Observation` = p_residual_corrected,
+         `Z Score of Observation` = z_residual) %>%
+  gt::gt() %>%
+  gt::fmt_number(columns = 2:3, n_sigfig = 3)
+
+
+```
+
+
+
+
+
+
+
+
+
+-----  
+\newpage
+<P style = "page-break-before: always">
+  
+  
+  
+### Model Difference Between RT-PCR Targets per S Gene:   
+  
+```{r fit_diff_sgene, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+
+#' model
+
+read_rds(file = paste0("./reports/m_lin_diff_sigma_sgene_",today_date,".rds.gz")) %>%
+  identity() -> m_lin_diff_sigma_sgene
+
+
+
+#' predictive distribution
+m_lin_diff_sigma_sgene$data %>%
+  as_tibble() %>%
+  expand(s_genefam = modelr::seq_range(s_genefam, n = 100)) %>%
+  add_predicted_draws(m_lin_diff_sigma_sgene) %>%
+  ggplot(aes(x = s_genefam, y = .prediction)) +
+  stat_lineribbon() +
+  geom_point(aes(x = s_genefam, y = diff), data = m_lin_diff_sigma_sgene$data, shape = 21) +
+  geom_hline(yintercept = mean(m_lin_diff_sigma_sgene$data$diff, na.rm = TRUE) - 2.5 * sd(m_lin_diff_sigma_sgene$data$diff, na.rm = TRUE), linetype = 2) +
+  geom_hline(yintercept = mean(m_lin_diff_sigma_sgene$data$diff, na.rm = TRUE) + 2.5 * sd(m_lin_diff_sigma_sgene$data$diff, na.rm = TRUE), linetype = 2) +
+  geom_vline(xintercept = 30, linetype = 2) + 
+  scale_fill_brewer() +
+  theme_bw() +
+  theme(axis.text = element_text(color = "black"),
+        plot.title.position = "plot") +
+  labs(x = "S gene (Ct)",
+       y = "Difference in Target Ct Values\n (ORF1ab Ct - S Gene Ct)",
+       fill = "Posterior\nPredictive\nInterval"#,
+       #title = "Model vs Threshold for Target Difference"
+       ) -> p_diff_model_sgene
+
+p_diff_model_sgene %>%
+  ggsave(filename = paste0("./reports/p_diff_model_sgene_",today_date,".pdf"), device = cairo_pdf, height = 4, width = 6, units = "in")
+p_diff_model_sgene %>%
+  ggsave(filename = paste0("./reports/p_diff_model_sgene_",today_date,".png"), height = 4, width = 6, units = "in")
+p_diff_model_sgene %>%
+  ggsave(filename = paste0("./reports/p_diff_model_sgene_",today_date,".svg"), height = 4, width = 6, units = "in")
+
+
+```
+
+```{r fit_diff_sgene_outliers, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=FALSE}
+
+#' outliers
+dat %>%
+  mutate(diff = orf1abjoe - s_genefam,
+         avg = map2_dbl(.x = orf1abjoe, .y = s_genefam, .f = ~ (.x + .y) / 2),
+  ) %>%
+  add_predicted_draws(m_lin_diff_sigma_sgene) %>%
+  select(diff, s_genefam, .row, .prediction) %>%
+  summarise(p_residual = mean(.prediction < diff),
+            p_residual_corrected = ifelse(p_residual < 0.5, 1 - p_residual, p_residual),
+            z_residual = qnorm(p_residual),
+            z_residual_corrected = qnorm(p_residual_corrected)) %>%
+  mutate(p_residual_corrected_999 = p_residual_corrected > 0.999,
+         p_residual_corrected_99 = p_residual_corrected > 0.99,
+         p_residual_corrected_95 = p_residual_corrected > 0.95,
+  ) %>%
+  #qplot(data = ., x = s_genefam, y = diff, color = p_residual_corrected > 0.99, geom = "point")
+  identity() -> dat_predictive_residuals_sgene
+
+dat_predictive_residuals_sgene %>%
+  ungroup() %>%
+  write_csv(paste0("./reports/residuals_m_lin_diff_sigma_sgene_", today_date, ".csv"))
+
+
+```
+
+  
+- Model parameter estimates:  
+  
+```{r param_diff_sgene, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+m_lin_diff_sigma_sgene %>%
+  posterior_summary() %>%
+  as_tibble(rownames = "Parameter") %>%
+  gt::gt() %>%
+  gt::fmt_number(columns = 2:5, n_sigfig = 3)
+
+
+
+```
+
+  
+  
+- Model fit diagnostics:  
+  
+```{r diag_diff_sgene, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+tibble(Divergences = rstan::get_num_divergent(m_lin_diff_sigma_sgene$fit),
+       `E-BFMI Pathology` = sum(rstan::get_bfmi(m_lin_diff_sigma_sgene$fit) > 1.2)) %>%
+  gt::gt()
+
+
+
+```
+
+  
+  
+- Model predictions:  
+  
+  
+```{r fig_diff_sgene, echo=FALSE, eval=TRUE, autodep=TRUE, fig.align='center', out.width='75%'}
+
+knitr::include_graphics(path = paste0("./reports/p_diff_model_sgene_",today_date,".svg"))
+
+
+```
+
+  
+- Most extreme outliers:   
+
+```{r tab_diff_sgene, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+dat_predictive_residuals_sgene %>%
+  ungroup() %>%
+  select(specimen_id, p_residual_corrected, z_residual) %>%
+  arrange(desc(p_residual_corrected)) %>%
+  filter(p_residual_corrected >= 0.99) %>%
+  #slice(1:10) %>%
+  rename(Specimen = specimen_id,
+         `Probability Quantile of Observation` = p_residual_corrected,
+         `Z Score of Observation` = z_residual) %>%
+  gt::gt() %>%
+  gt::fmt_number(columns = 2:3, n_sigfig = 3)
+
+
+```
+  
+  
+
+-----  
+\newpage
+<P style = "page-break-before: always">
+  
+  
+### Outliers Identified by both ORF1ab & S Gene Models:   
+
+- Intersection of model output:  
+
+```{r tab_diff_orf1ab_intersect_sgene, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, include=TRUE}
+
+dat_predictive_residuals_orf1ab %>%
+  ungroup() %>%
+  select(specimen_id, p_residual_corrected, z_residual) %>%
+  arrange(desc(p_residual_corrected)) %>%
+  filter(p_residual_corrected >= 0.99) %>%
+  identity() -> top_orf1ab
+
+dat_predictive_residuals_sgene %>%
+  ungroup() %>%
+  select(specimen_id, p_residual_corrected, z_residual) %>%
+  arrange(desc(p_residual_corrected)) %>%
+  filter(p_residual_corrected >= 0.99) %>%
+  identity() -> top_sgene
+
+
+
+top_sgene %>%
+  inner_join(top_orf1ab, by = "specimen_id") %>%
+  select(specimen_id) %>%
+  rename(Specimen = specimen_id) %>%
+  gt::gt()
+
+
+
+```
+

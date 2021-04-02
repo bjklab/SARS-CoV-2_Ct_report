@@ -1,0 +1,45 @@
+/* Whole document: */
+body{
+  font-family: Helvetica;
+  font-size: 11pt;
+  line-height: 2;
+  margin-top: 0;
+  margin-bottom: 6;
+}
+/* Headers */
+h1{
+  font-family: Helvetica;
+  font-size: 11pt;
+  font-weight: bold;
+  text-decoration: underline;
+  text-transform: uppercase;
+  line-height: 2;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+h2{
+  font-family: Helvetica;
+  font-size: 11pt;
+  font-weight: bold;
+  text-transform: uppercase;
+  line-height: 2;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+h3{
+  font-family: Helvetica;
+  font-size: 11pt;
+  font-weight: bold;
+  text-decoration: underline;
+  line-height: 2;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+h4,h5,h6{
+  font-family: Helvetica;
+  font-size: 11pt;
+  font-weight: bold;
+  line-height: 2;
+  margin-top: 0;
+  margin-bottom: 0;
+}
